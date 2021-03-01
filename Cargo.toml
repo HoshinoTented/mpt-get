@@ -1,0 +1,15 @@
+[package]
+name = "mpt-get"
+version = "0.1.0"
+authors = ["HoshinoTented <limbolrain@gmail.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+dirs = "3.0"
+git2 = "0.13"
+# reqwest = "0.11"
+clap = "2.33"
