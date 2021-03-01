@@ -7,10 +7,10 @@ use crate::logger::{Logger, StdioLogger};
 use crate::error::{AsResult, Result, index_err};
 use crate::index::package::Packages;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MirrorRepo {
-    url: String,
-    branch: String
+    pub url: String,
+    pub branch: String
 }
 
 impl Default for MirrorRepo {
@@ -24,8 +24,8 @@ impl Default for MirrorRepo {
 
 #[derive(Debug)]
 pub struct Updater<Log: Logger> {
-    repo: MirrorRepo,
-    dir: PathBuf,
+    pub repo: MirrorRepo,
+    pub dir: PathBuf,
     _phantom: PhantomData<Log>
 }
 
@@ -61,6 +61,14 @@ impl <Log: Logger> Updater<Log> {
         }
     }
 
+    pub fn repo(&self) -> &MirrorRepo {
+        &self.repo
+    }
+
+    pub fn index_dir(&self) -> &PathBuf {
+        &self.dir
+    }
+
     pub fn update(&self) -> Result<()> {
         if self.dir.exists() {
             let repo = Repository::open(&self.dir)?;
@@ -83,7 +91,7 @@ impl <Log: Logger> Updater<Log> {
     }
 
 
-    pub fn list(&self) -> Result<Packages> {
+    pub fn index(&self) -> Result<Packages> {
         let mut index = self.dir.clone();
         index.push("packages.json");
 
@@ -112,6 +120,6 @@ mod tests {
 
     #[test]
     fn list_pkg() {
-        println!("{:?}", updater().list().unwrap());
+        println!("{:?}", updater().index().unwrap());
     }
 }

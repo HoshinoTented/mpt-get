@@ -5,7 +5,8 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Debug)]
 pub enum ErrorKind {
     Index,
-    IO
+    IO,
+    Parse
 }
 
 #[derive(Debug)]
@@ -19,7 +20,8 @@ impl Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let kind_human = match self.kind {
             ErrorKind::Index => "updating index",
-            ErrorKind::IO => "I/O"
+            ErrorKind::IO => "I/O",
+            ErrorKind::Parse => "parsing"
         };
 
         write!(f, "Error occursed when {}: {}", kind_human, self.message)
@@ -36,6 +38,13 @@ pub fn index_err<S: ToString>(message: S) -> Error {
 pub fn io_err<S: ToString>(message: S) -> Error {
     Error {
         kind: ErrorKind::IO,
+        message: message.to_string()
+    }
+}
+
+pub fn parse_err<S: ToString>(message: S) -> Error {
+    Error {
+        kind: ErrorKind::Parse,
         message: message.to_string()
     }
 }
@@ -67,5 +76,14 @@ impl From<std::io::Error> for Error {
 impl From<git2::Error> for Error {
     fn from(err: git2::Error) -> Self {
         index_err(format!("{:?}", err))
+    }
+}
+
+impl From<regex::Error> for Error {
+    fn from(err: regex::Error) -> Self {
+        Error {
+            kind: ErrorKind::Parse,
+            message: format!("{:?}", err)
+        }
     }
 }

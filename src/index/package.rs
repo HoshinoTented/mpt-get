@@ -1,9 +1,10 @@
+use regex::Regex;
 use serde::Deserialize;
 use serde_json::Value;
 
-use std::{collections::HashMap, fs::File, io::BufReader};
+use std::{collections::HashMap, fs::File, io::BufReader, path::{Path, PathBuf}};
 
-use crate::error::{AsResult, Result, index_err};
+use crate::error::*;
 
 macro_rules! make_err {
     ( $file:literal , $reason:literal ) => {{
@@ -23,23 +24,39 @@ macro_rules! make_err {
 
 #[derive(Debug)]
 pub struct Packages {
-    map: HashMap<String, PackageEntry>,
+    pub map: HashMap<String, PackageEntry>,
 }
 
 #[derive(Debug, Deserialize, PartialEq, Eq)]
 pub struct PackageEntry {
-    name: String,
-    description: String,
-    channels: Vec<String>,
-    website: String,
+    pub name: String,
+    pub description: String,
+    pub channels: Vec<String>,
+    pub website: String,
 }
 
 #[derive(Debug)]
 pub struct Package {
-    channels: HashMap<String, Versions>,
+    pub channels: HashMap<String, Versions>,
 }
 
 pub type Versions = Vec<String>;
+
+fn value_from_file<P: AsRef<Path>>(path: P) -> Result<Value> {
+    let path = path.as_ref();
+
+    if let Some(name) = path.file_name() {
+        let file = File::open(path)
+            .map_err( |_| io_err(format!("cannot open {:?}", name)))?;
+
+        let value = serde_json::from_reader(BufReader::new(file))
+            .map_err(|_| io_err(format!("failed to parse {:?}", name)))?;
+
+        Ok(value)
+    } else {
+        Err(io_err(format!("failed to get filename")))
+    }
+}
 
 impl Packages {
     pub fn from_value(value: Value) -> Result<Packages> {
@@ -57,11 +74,8 @@ impl Packages {
         }
     }
 
-    pub fn from_file<P: AsRef<std::path::Path>>(path: P) -> Result<Packages> {
-        let file = File::open(path).map_err( |_| make_err!("packages.json", "cannot open packages.json"))?;
-        let value = serde_json::from_reader(BufReader::new(file)).map_err(|_| make_err!("packages.json", "cannot parse packages.json"))?;
-        
-        Packages::from_value(value)
+    pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Packages> {
+        Packages::from_value(value_from_file(path)?)
     }
 
     pub fn list(&self) -> &HashMap<String, PackageEntry> {
@@ -109,11 +123,37 @@ impl Package {
 
         Ok(Package { channels })
     }
+
+    pub fn resolve_path(pid: &str, mut index_dir: PathBuf) -> Result<PathBuf> {
+        let reg = Regex::new(r#"^([\w\d\.\-]+):([\w\d\.\-]+)$"#)?;
+        let matches = reg.captures(pid).ok_or(parse_err("invalied pid"))?;
+
+        let domain = matches.get(1).unwrap().as_str(); 
+        let id = matches.get(2).unwrap().as_str();
+
+        for dir in domain.split(".") {
+            index_dir.push(dir);
+        }
+
+        index_dir.push(id);
+        index_dir.push("package.json");
+    
+        Ok(index_dir)
+    }
+
+    pub fn from_pid<P: AsRef<Path>>(pid: &str, dir: P) -> Result<Package> {
+        let path = PathBuf::from(dir.as_ref());
+        let path = Package::resolve_path(pid, path)?;
+
+        Package::from_value(value_from_file(path)?)
+    }
 }
 
 #[allow(unused)]
 #[cfg(test)]
 mod tests {
+    use crate::{index::update, logger::StdioLogger};
+
     use super::*;
 
     const PACKAGES_JSON: &'static str = r#"{"net.mamoe:mirai-console": {
@@ -163,5 +203,17 @@ mod tests {
         let expect: Versions = vec!["1.9.6", "1.9.7", "1.9.8"].into_iter().map(ToString::to_string).collect();
 
         assert_eq!(&expect, stable_channel);
+    }
+
+    /**
+     * make sure that have updated index
+     */
+    #[test]
+    fn read_package_info() {
+        let updater = crate::index::update::Updater::<StdioLogger>::default().unwrap();
+        let dir = updater.index_dir();
+        let package = Package::from_pid("net.mamoe:mirai-console", dir).unwrap();
+
+        println!("{:?}", package);
     }
 }
