@@ -15,6 +15,9 @@ pub struct Error {
     message: String
 }
 
+impl std::error::Error for Error {
+    
+}
 
 impl Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -81,6 +84,15 @@ impl From<git2::Error> for Error {
 
 impl From<regex::Error> for Error {
     fn from(err: regex::Error) -> Self {
+        Error {
+            kind: ErrorKind::Parse,
+            message: format!("{:?}", err)
+        }
+    }
+}
+
+impl From<hyper::http::uri::InvalidUri> for Error {
+    fn from(err: hyper::http::uri::InvalidUri) -> Self {
         Error {
             kind: ErrorKind::Parse,
             message: format!("{:?}", err)
