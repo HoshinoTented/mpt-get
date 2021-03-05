@@ -1,10 +1,11 @@
 use regex::Regex;
 use serde::Deserialize;
 use serde_json::Value;
+use anyhow::Result;
 
-use std::{collections::HashMap, fs::File, io::BufReader, path::{Path, PathBuf}};
+use std::{collections::HashMap, convert::TryFrom, fs::File, hash::Hash, io::BufReader, path::{Path, PathBuf}};
 
-use crate::error::*;
+use crate::error::{index_err, io_err};
 
 macro_rules! make_err {
     ( $file:literal , $reason:literal ) => {{
@@ -22,9 +23,87 @@ macro_rules! make_err {
     };
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub struct PackageID {
+    pub domain: String,
+    pub name: String
+}
+
+impl PackageID {
+    pub fn to_path_str(&self) -> String {
+        let domain_path = self.domain.replace(".", "/");
+
+        format!("{}/{}", domain_path, self.name)
+    }
+
+    pub fn resolve_path(&self, mut index_dir: PathBuf) -> PathBuf {
+        // for dir in self.domain.split(".") {
+        //     index_dir.push(dir);
+        // }
+
+        // index_dir.push(&self.name);
+        // index_dir.push("package.json");
+    
+        // index_dir
+
+        index_dir.push(self.to_path_str());
+        index_dir.push("package.json");
+        index_dir
+    }
+}
+
+impl std::hash::Hash for PackageID {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.domain.hash(state);
+        self.name.hash(state);
+    }
+}
+
+impl std::fmt::Display for PackageID {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}:{}", self.domain, self.name)
+    }
+}
+
+impl <'de> Deserialize<'de> for PackageID {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de> {
+        use serde::de::Error;
+
+        struct Visitor;
+
+        impl <'t> serde::de::Visitor<'t> for Visitor {
+            type Value = PackageID;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
+                write!(f, "string")
+            }
+
+            fn visit_str<E>(self, str: &str) -> std::result::Result<Self::Value, E> where E: Error {
+                self.visit_string(str.to_string())
+            }
+
+            fn visit_string<E>(self, str: String) -> std::result::Result<Self::Value, E> where E: Error {
+                let reg = Regex::new(r#"^([\w\d\.\-]+):([\w\d\.\-]+)$"#).unwrap();
+                let matches = reg.captures(&str).ok_or(Error::custom("invalid pid"))?;
+
+                let pid = PackageID {
+                    domain: matches[1].to_string(),
+                    name: matches[2].to_string()
+                };
+
+                Ok(pid)
+            }
+        }
+
+        deserializer.deserialize_string(Visitor)
+    }
+}
+
 #[derive(Debug)]
 pub struct Packages {
-    pub map: HashMap<String, PackageEntry>,
+    pub map: HashMap<PackageID, PackageEntry>,
 }
 
 #[derive(Debug, Deserialize, PartialEq, Eq)]
@@ -36,7 +115,7 @@ pub struct PackageEntry {
 }
 
 #[derive(Debug)]
-pub struct Package {
+pub struct PackageVersion {
     pub channels: HashMap<String, Versions>,
 }
 
@@ -54,7 +133,7 @@ fn value_from_file<P: AsRef<Path>>(path: P) -> Result<Value> {
 
         Ok(value)
     } else {
-        Err(io_err(format!("failed to get filename")))
+        Err(io_err(format!("failed to get filename")).into())
     }
 }
 
@@ -64,13 +143,14 @@ impl Packages {
             Value::Object(obj) => {
                 let map = obj
                     .into_iter()
-                    .filter_map(|(id, entry)| Some((id, serde_json::from_value(entry).ok()?)))
+                    .filter_map(|(pid, entry)| 
+                        Some((serde_json::from_value(Value::String(pid)).ok()?, serde_json::from_value(entry).ok()?)))
                     .collect();
 
                 Ok(Packages { map })
             }
 
-            _ => Err(make_err!("packages.json")),
+            _ => Err(make_err!("packages.json").into()),
         }
     }
 
@@ -78,7 +158,7 @@ impl Packages {
         Packages::from_value(value_from_file(path)?)
     }
 
-    pub fn list(&self) -> &HashMap<String, PackageEntry> {
+    pub fn list(&self) -> &HashMap<PackageID, PackageEntry> {
         &self.map
     }
 
@@ -101,8 +181,8 @@ website: {}"#, self.name, self.description, self.channels, self.website)
     }
 }
 
-impl Package {
-    pub fn from_value(value: Value) -> Result<Package> {
+impl PackageVersion {
+    pub fn from_value(value: Value) -> Result<PackageVersion> {
         let obj = value.as_object().ok_or(make_err!("package.json"))?;
         let channels = obj
             .get("channels")
@@ -121,38 +201,21 @@ impl Package {
             })
             .collect();
 
-        Ok(Package { channels })
+        Ok(PackageVersion { channels })
     }
 
-    pub fn resolve_path(pid: &str, mut index_dir: PathBuf) -> Result<PathBuf> {
-        let reg = Regex::new(r#"^([\w\d\.\-]+):([\w\d\.\-]+)$"#)?;
-        let matches = reg.captures(pid).ok_or(parse_err("invalied pid"))?;
-
-        let domain = matches.get(1).unwrap().as_str(); 
-        let id = matches.get(2).unwrap().as_str();
-
-        for dir in domain.split(".") {
-            index_dir.push(dir);
-        }
-
-        index_dir.push(id);
-        index_dir.push("package.json");
-    
-        Ok(index_dir)
-    }
-
-    pub fn from_pid<P: AsRef<Path>>(pid: &str, dir: P) -> Result<Package> {
+    pub fn from_pid<P: AsRef<Path>>(pid: &PackageID, dir: P) -> Result<PackageVersion> {
         let path = PathBuf::from(dir.as_ref());
-        let path = Package::resolve_path(pid, path)?;
+        let path = PackageID::resolve_path(pid, path);
 
-        Package::from_value(value_from_file(path)?)
+        PackageVersion::from_value(value_from_file(path)?)
     }
 }
 
 #[allow(unused)]
 #[cfg(test)]
 mod tests {
-    use crate::{index::update, logger::StdioLogger};
+    use crate::{index::update, logger::StdioLogger, config::Config};
 
     use super::*;
 
@@ -177,10 +240,15 @@ mod tests {
         }
     }"#;
 
+    fn mirai_console_id() -> PackageID {
+        serde_json::from_value::<PackageID>(Value::String(String::from("net.mamoe:mirai-console"))).unwrap()
+    }
+
     #[test]
     fn parse_packages() {
         let packages = Packages::from_value(serde_json::from_str(PACKAGES_JSON).unwrap()).unwrap();
-        let entry = &packages.list()["net.mamoe:mirai-console"];
+        let pid = mirai_console_id();
+        let entry = &packages.list()[&pid];
 
         let expect = PackageEntry {
             name: "Mirai Console".to_string(),
@@ -197,7 +265,7 @@ mod tests {
 
     #[test]
     fn parse_package() {
-        let package = Package::from_value(serde_json::from_str(PACKAGE_JSON).unwrap()).unwrap();
+        let package = PackageVersion::from_value(serde_json::from_str(PACKAGE_JSON).unwrap()).unwrap();
         let stable_channel = &package.channels["stable"];
 
         let expect: Versions = vec!["1.9.6", "1.9.7", "1.9.8"].into_iter().map(ToString::to_string).collect();
@@ -210,10 +278,21 @@ mod tests {
      */
     #[test]
     fn read_package_info() {
-        let updater = crate::index::update::Updater::<StdioLogger>::default().unwrap();
+        let updater = Config::default().updater::<StdioLogger>();
         let dir = updater.index_dir();
-        let package = Package::from_pid("net.mamoe:mirai-console", dir).unwrap();
+        let package = PackageVersion::from_pid(&mirai_console_id(), dir).unwrap();
 
         println!("{:?}", package);
+    }
+
+    #[test]
+    fn deser_pid() {
+        let pid = "\"net.mamoe:mirai-console\"";
+        let pkgid: PackageID = serde_json::from_str(pid).unwrap();
+
+        assert_eq!(PackageID {
+            domain: String::from("net.mamoe"),
+            name: String::from("mirai-console")
+        }, pkgid);
     }
 }

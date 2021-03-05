@@ -2,9 +2,10 @@ use std::{fs::File, io::{BufReader, Write}, marker::PhantomData, path::{Path, Pa
 use std::process::Command;
 
 use git2::{Repository, ResetType};
+use anyhow::Result;
 
 use crate::logger::{Logger, StdioLogger};
-use crate::error::{AsResult, Result, index_err};
+use crate::error::{AsResult, index_err};
 use crate::index::package::Packages;
 
 #[derive(Debug, Clone)]
@@ -13,47 +14,32 @@ pub struct MirrorRepo {
     pub branch: String
 }
 
-impl Default for MirrorRepo {
-    fn default() -> Self {
+impl MirrorRepo {
+    pub fn new<S: ToString>(url: S) -> Self {
         MirrorRepo {
-            url: "https://gitee.com/peratx/mirai-repo.git".to_string(),
-            branch: "master".to_string()
+            url: url.to_string(),
+            branch: String::from("master")
         }
+    }
+
+    pub fn url(&self) -> &String {
+        &self.url
+    }
+
+    pub fn branch(&self) -> &String {
+        &self.branch
     }
 }
 
 #[derive(Debug)]
 pub struct Updater<Log: Logger> {
-    pub repo: MirrorRepo,
-    pub dir: PathBuf,
+    repo: MirrorRepo,
+    dir: PathBuf,
     _phantom: PhantomData<Log>
 }
 
-fn find_git() -> Result<bool> {
-    let output = git().output().as_index_err("failed to execute command \"git\"")?;       // TODO: read from config
-
-    Ok(output.status.success())
-}
-
-fn git() -> Command {
-    Command::new("git")
-}
-
 impl <Log: Logger> Updater<Log> {
-    pub fn default() -> Option<Updater<StdioLogger>> {
-        let mut home_dir = dirs::home_dir()?;
-
-        home_dir.push(".mpt-get");
-        home_dir.push("index");
-
-        Some(Updater {
-            repo: MirrorRepo::default(),
-            dir: home_dir,
-            _phantom: PhantomData::default()
-        })
-    }
-
-    pub fn new(repo: MirrorRepo, dir: PathBuf) -> Updater<StdioLogger> {
+    pub fn new(repo: MirrorRepo, dir: PathBuf) -> Updater<Log> {
         Updater {
             repo,
             dir,
@@ -101,19 +87,17 @@ impl <Log: Logger> Updater<Log> {
 
 #[cfg(test)]
 mod tests {
-    use std::process::{Stdio};
-
-    use crate::logger::StdioLogger;
+    use crate::{config::Config, logger::StdioLogger};
 
     use super::Updater;
 
     fn updater() -> Updater<StdioLogger> {
-        Updater::<StdioLogger>::default().unwrap()
+        Config::default().updater()
     }
 
     #[test]
     fn update() {
-        let updater = Updater::<StdioLogger>::default().unwrap();
+        let updater = updater();
         
         updater.update().unwrap();
     }
